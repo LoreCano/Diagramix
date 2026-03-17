@@ -12,6 +12,7 @@ This repo includes **backend** (Node.js/Express) + **frontend** (HTML/CSS/JS).
 ## Prerequisites
 
 - **Node.js** (recommended: LTS) and **npm**
+- **Git** (Only if you want to analyze public GitHub repositories)
 
 ## Install
 
@@ -24,7 +25,5 @@ npm install
 node server.js
 ```
 
-API runs on:
-- API base: `http://localhost:5050`
 
 
