@@ -1,0 +1,219 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Diagramix — Analyzer</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=IBM+Plex+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel='stylesheet' href='style.css' />
+</head>
+<body>
+
+<nav>
+  <div class="logo"><div class="logo-dot"></div> Diagramix</div>
+  <div class="nav-right">
+    <span>Code Analysis → UML</span>
+    <span class="ver">v1.0</span>
+  </div>
+</nav>
+
+<div class="shell">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="sb-top">
+      <div class="sb-intro">
+        <strong>Diagramix</strong> analyzes your ZIP source code or a public GitHub repository (Java, C++) and generates UML blocks, previews, and downloadable PlantUML.
+      </div>
+
+      <div class="sec-label">Source</div>
+      <div class="src-row" role="group" aria-label="Project source">
+        <button class="btn-sm src-btn" id="srcZip" type="button" aria-pressed="true">📦 ZIP</button>
+        <button class="btn-sm src-btn" id="srcGit" type="button" aria-pressed="false">🔗 GitHub</button>
+      </div>
+
+      <div id="zipSection">
+        <div class="sec-label">Upload Project</div>
+
+        <div class="upload-zone" id="uploadZone">
+          <input type="file" id="fileInput" accept=".zip" />
+          <div class="u-icon">📦</div>
+          <div class="u-title">Drop your ZIP</div>
+          <div class="u-sub">or click to select</div>
+          <div class="lang-row">
+            <span class="pill j">Java</span>
+            <span class="pill x">C++</span>
+          </div>
+        </div>
+
+        <div class="file-chip" id="fileChip">
+          <span>📄</span>
+          <span class="fc-name" id="fileName">—</span>
+          <span class="fc-size" id="fileSize"></span>
+        </div>
+      </div>
+
+      <div id="gitSection">
+        <div class="sec-label">GitHub Repository</div>
+
+        <div class="repo-zone" id="repoZone">
+          <input type="url" id="repoUrl" inputmode="url" autocomplete="off" spellcheck="false"
+            placeholder="https://github.com/owner/repo" />
+          <div class="repo-sub">Public repositories only (github.com).</div>
+          <div class="lang-row">
+            <span class="pill j">Java</span>
+            <span class="pill x">C++</span>
+          </div>
+        </div>
+
+        <div class="file-chip" id="repoChip">
+          <span>🔗</span>
+          <span class="fc-name" id="repoName">—</span>
+          <span class="fc-size" id="repoHost"></span>
+        </div>
+      </div>
+
+      <button class="btn-analyze" id="analyzeBtn" disabled type="button">
+        ⬡ Analyze Project
+      </button>
+
+      <div class="err-box" id="errBox"></div>
+
+      <div class="opts" id="opts">
+        <label class="opt">
+          <input type="checkbox" id="grpPackage" />
+          <span class="opt-txt">
+            <span class="opt-t">Group by package</span>
+            <span class="opt-s">Great for Java projects: groups classes by their package declaration.</span>
+          </span>
+        </label>
+        <label class="opt">
+          <input type="checkbox" id="grpDir" />
+          <span class="opt-txt">
+            <span class="opt-t">Group by directory</span>
+            <span class="opt-s">Groups by folders based on the file paths inside the repository.</span>
+          </span>
+        </label>
+      </div>
+    </div>
+
+    <div class="stats-strip" id="statsStrip">
+      <div class="stat-box"><div class="sv" id="sv0">0</div><div class="sl">files</div></div>
+      <div class="stat-box"><div class="sv" id="sv1">0</div><div class="sl">classes</div></div>
+      <div class="stat-box"><div class="sv" id="sv4">0</div><div class="sl">interfaces</div></div>
+      <div class="stat-box"><div class="sv" id="sv5">0</div><div class="sl">structs</div></div>
+      <div class="stat-box"><div class="sv" id="sv6">0</div><div class="sl">enums</div></div>
+      <div class="stat-box"><div class="sv" id="sv7">0</div><div class="sl">packages</div></div>
+      <div class="stat-box"><div class="sv" id="sv8">0</div><div class="sl">directories</div></div>
+      <div class="stat-box"><div class="sv" id="sv2">0</div><div class="sl">methods</div></div>
+      <div class="stat-box"><div class="sv" id="sv3">0</div><div class="sl">relations</div></div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main">
+
+    <div class="tabs">
+      <button class="tb active" data-tab="diagram" type="button">
+        UML Blocks <span class="tc" id="tc0">—</span>
+      </button>
+      <button class="tb" data-tab="preview" type="button">
+        Preview
+      </button>
+      <button class="tb" data-tab="plantuml" type="button">
+        PlantUML Source
+      </button>
+      <button class="tb" data-tab="detail" id="detailBtn" style="display:none" type="button">
+        Details
+      </button>
+    </div>
+
+    <!-- Loading inside main -->
+    <div class="loading" id="loading">
+      <div class="spin"></div>
+      <div class="ls-list">
+        <div class="ls" id="ls1"><span class="ls-i">○</span> Preparing input</div>
+        <div class="ls" id="ls2"><span class="ls-i">○</span> Fetching sources</div>
+        <div class="ls" id="ls3"><span class="ls-i">○</span> Parsing</div>
+        <div class="ls" id="ls4"><span class="ls-i">○</span> Building model</div>
+        <div class="ls" id="ls5"><span class="ls-i">○</span> Rendering blocks</div>
+      </div>
+    </div>
+
+    <div class="panels" id="panels">
+
+      <!-- TAB: UML BLOCKS -->
+      <div class="panel show" id="panel-diagram">
+        <div class="empty" id="emptyD">
+          <div class="ei">◻</div>
+          <div class="et">No diagrams yet</div>
+          <div class="es">Upload a ZIP or paste a GitHub repository URL, then click Analyze</div>
+        </div>
+        <div class="blocks" id="blocks" style="display:none"></div>
+      </div>
+
+      <!-- TAB: PREVIEW -->
+      <div class="panel" id="panel-preview">
+        <div class="empty" id="emptyV">
+          <div class="ei">◈</div>
+          <div class="et">No previews yet</div>
+          <div class="es">Analyze a project first</div>
+        </div>
+        <div id="prevPanel" style="display:none">
+          <div class="puml-toolbar">
+            <span class="puml-title">UML Preview</span>
+            <button class="btn-sm pri" data-action="render-all" type="button">Render All</button>
+          </div>
+          <div class="blocks" id="prevWrap"></div>
+        </div>
+      </div>
+
+      <!-- TAB: PLANTUML SOURCE -->
+      <div class="panel" id="panel-plantuml">
+        <div class="empty" id="emptyP">
+          <div class="ei">📝</div>
+          <div class="et">No source yet</div>
+          <div class="es">Analyze a project first</div>
+        </div>
+        <div id="pumlPanel" style="display:none">
+          <div class="puml-toolbar">
+            <span class="puml-title">PlantUML Source</span>
+            <button class="btn-sm" data-action="copy-all" type="button">⎘ Copy All</button>
+            <button class="btn-sm" data-action="dl-plantuml" type="button">⬇ .plantuml</button>
+          </div>
+          <div class="puml-blocks" id="pumlBlocks"></div>
+        </div>
+      </div>
+
+      <!-- TAB: DETAIL -->
+      <div class="panel" id="panel-detail">
+        <div class="puml-toolbar" id="detailTop" style="display:none">
+          <span class="puml-title">Class Details</span>
+          <button class="btn-sm" id="detailClose" type="button" aria-label="Close details">×</button>
+        </div>
+        <div class="empty" id="emptyDet">
+          <div class="ei">◎</div>
+          <div class="et">Select a class</div>
+          <div class="es">Click a UML card to open the details</div>
+        </div>
+        <div id="detContent" style="display:none"></div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+<footer>
+  <div class="foot">
+    <span class="foot-brand">Diagramix</span>
+    <span class="sep">·</span>
+    <span>Lorenzo Canocchi</span>
+    <span class="sep">·</span>
+    <span>All rights reserved</span>
+  </div>
+</footer>
+
+<script src="app.js" defer></script>
+</body>
+</html>
