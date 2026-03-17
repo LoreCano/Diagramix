@@ -1,6 +1,6 @@
 # Diagramix
 
-Diagramix is a lightweight analyzer for **Java, C and C++** projects.
+Diagramix is a lightweight analyzer for **Java and C++** projects.
 Upload a `.zip` or paste a public GitHub repository URL and get:
 
 - **UML Blocks** (readable cards for classes/interfaces/enums/structs)
