@@ -26,6 +26,6 @@ node server.js
 ```
 
 ## Website
-Diagramix is also available online at [diagramix.onrender.com](https://diagramix.onrender.com/)).
+Diagramix is also available online at [diagramix.onrender.com](https://diagramix.onrender.com/).
 Ps. The server will spend few seconds for the initial set up.
 
