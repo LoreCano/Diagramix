@@ -801,7 +801,7 @@ function dlPlantUML() {
 }
 
 async function krokiRender(format, puml) {
-  const url = `${API}/api/render/${format}`;
+  const url = `https://kroki.io/plantuml/${format}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
