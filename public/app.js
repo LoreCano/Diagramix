@@ -1,6 +1,6 @@
 'use strict';
 
-const API = 'https://diagramix.onrender.com/';
+const API = 'https://diagramix.onrender.com';
 
 let file = null;
 let repoUrl = '';
