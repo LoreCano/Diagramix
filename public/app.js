@@ -539,9 +539,7 @@ function paintPumlTab(puml, classes) {
   wrap.innerHTML = '';
 
   const lines = puml.split('\n');
-  const cfgLines = lines.filter((l) => l.startsWith('@startuml') || l.startsWith('skinparam'));
-  if (cfgLines.length) wrap.appendChild(mkPumlBlock('Configuration', cfgLines.join('\n'), false, '', null));
-
+  
   if (groupMode === 'package' || groupMode === 'dir') {
     const grouped = {};
     classes.forEach((c) => {
@@ -570,8 +568,7 @@ function paintPumlTab(puml, classes) {
   const relLines = lines.filter((l) => relLine(l));
   if (relLines.length) wrap.appendChild(mkPumlBlock('Relations (all)', relLines.join('\n'), false, `${relLines.length}`, null));
 
-  wrap.appendChild(mkPumlBlock('End', '@enduml', false, '', null));
-}
+  }
 
 function mkPumlBlock(label, code, open, meta, dlKey) {
   const el = document.createElement('div');
