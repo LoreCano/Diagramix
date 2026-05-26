@@ -1,58 +1,327 @@
 /**
- * parser.js
- * Parsing leggero di Java e C/C++ tramite regex.
- * Per un parsing completo in produzione:
- *   - Java  → usa java-parser (npm)
- *   - C/C++ → usa node bindings di Clang/Tree-sitter
+ * parser.js — versione ultra ottimizzata (FSM + scanning strutturato)
  */
+
+// ─────────────────────────────────────────────
+//  CORE UTILS (FSM & Quote-Aware Scanners)
+// ─────────────────────────────────────────────
+
+/**
+ * Rimuove i commenti monolinea e multilinea rispettando le stringhe e i caratteri letterali.
+ * Complessità temporale: O(N)
+ */
+function removeComments(src) {
+  let result = '';
+  let inString = false;
+  let inChar = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let escaped = false;
+
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    const next = src[i + 1] || '';
+
+    if (inLineComment) {
+      if (c === '\n') {
+        inLineComment = false;
+        result += c; // preserva la riga per allineamento
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (c === '*' && next === '/') {
+        inBlockComment = false;
+        i++; // salta '/'
+      }
+      continue;
+    }
+
+    if (inString) {
+      result += c;
+      if (escaped) {
+        escaped = false;
+      } else if (c === '\\') {
+        escaped = true;
+      } else if (c === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (inChar) {
+      result += c;
+      if (escaped) {
+        escaped = false;
+      } else if (c === '\\') {
+        escaped = true;
+      } else if (c === "'") {
+        inChar = false;
+      }
+      continue;
+    }
+
+    // Rileva inizio commenti o stringhe
+    if (c === '/' && next === '/') {
+      inLineComment = true;
+      i++;
+    } else if (c === '/' && next === '*') {
+      inBlockComment = true;
+      i++;
+    } else if (c === '"') {
+      inString = true;
+      result += c;
+    } else if (c === "'") {
+      inChar = true;
+      result += c;
+    } else {
+      result += c;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Estrae le istruzioni top-level tenendo traccia delle virgolette per ignorare le parentesi graffe interne alle stringhe.
+ * Complessità temporale: O(N)
+ */
+function extractTopLevelStatements(body) {
+  const result = [];
+  let current = '';
+  let depth = 0;
+  let inString = false;
+  let inChar = false;
+  let escaped = false;
+
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+
+    if (inString) {
+      current += c;
+      if (escaped) {
+        escaped = false;
+      } else if (c === '\\') {
+        escaped = true;
+      } else if (c === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (inChar) {
+      current += c;
+      if (escaped) {
+        escaped = false;
+      } else if (c === '\\') {
+        escaped = true;
+      } else if (c === "'") {
+        inChar = false;
+      }
+      continue;
+    }
+
+    if (c === '"') {
+      inString = true;
+      current += c;
+      continue;
+    }
+
+    if (c === "'") {
+      inChar = true;
+      current += c;
+      continue;
+    }
+
+    if (c === '{') depth++;
+    if (c === '}') depth--;
+
+    if (depth >= 0) {
+      current += c;
+    }
+
+    if (depth === 0) {
+      if (c === ';' || c === '}') {
+        result.push(current.trim());
+        current = '';
+      }
+    }
+  }
+
+  if (current.trim()) {
+    result.push(current.trim());
+  }
+
+  return result.map(s => s.trim()).filter(Boolean);
+}
+
+/**
+ * Estrae un blocco tra graffe tenendo traccia delle virgolette per ignorare le parentesi graffe interne a stringhe o commenti.
+ */
+function extractBlock(src, startIdx) {
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let inChar = false;
+  let escaped = false;
+
+  for (let i = startIdx; i < src.length; i++) {
+    const c = src[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (c === '\\') {
+        escaped = true;
+      } else if (c === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (inChar) {
+      if (escaped) {
+        escaped = false;
+      } else if (c === '\\') {
+        escaped = true;
+      } else if (c === "'") {
+        inChar = false;
+      }
+      continue;
+    }
+
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (c === "'") {
+      inChar = true;
+      continue;
+    }
+
+    if (c === '{') {
+      if (depth === 0) start = i + 1;
+      depth++;
+    } else if (c === '}') {
+      depth--;
+      if (depth === 0) return src.slice(start, i);
+    }
+  }
+
+  return '';
+}
+
+function visSymbol(v) {
+  return { public: '+', protected: '#', private: '-', package: '~' }[v] || '~';
+}
+
+const INVALID = new Set([
+  'if','else','while','for','switch','case','break','continue',
+  'return','catch','try','do','new','delete','sizeof'
+]);
+
+/**
+ * Estrae i tipi di riferimento dai parametri per identificare le relazioni "uses" di associazione.
+ */
+function extractReferencedTypes(typeStr) {
+  if (!typeStr) return [];
+  const parts = typeStr.split(/[<>,\[\]\s\*&]/).map(p => p.trim()).filter(Boolean);
+  
+  const primitives = new Set([
+    'byte', 'short', 'int', 'long', 'float', 'double', 'boolean', 'char', 'void',
+    'Byte', 'Short', 'Integer', 'Long', 'Float', 'Double', 'Boolean', 'Character', 'Void',
+    'String', 'Object', 'List', 'Set', 'Map', 'HashMap', 'ArrayList', 'vector', 'string',
+    'std::string', 'int32_t', 'int64_t', 'uint32_t', 'uint64_t', 'size_t', 'bool'
+  ]);
+
+  return parts.filter(p => !primitives.has(p) && /^[A-Za-z_]\w*$/.test(p));
+}
 
 // ─────────────────────────────────────────────
 //  JAVA PARSER
 // ─────────────────────────────────────────────
 
-/**
- * Estrae classi, interfacce, metodi, attributi e relazioni da codice Java.
- * @param {string} src  - contenuto del file
- * @param {string} file - nome file
- * @returns {ClassModel[]}
- */
 function parseJava(src, file) {
+  const clean = removeComments(src);
   const classes = [];
 
-  // Rimuovi commenti
-  const clean = src
-    .replace(/\/\/[^\n]*/g, '')
-    .replace(/\/\*[\s\S]*?\*\//g, '');
-
-  // Package (unico per file in Java)
   const pkgMatch = /^\s*package\s+([\w.]+)\s*;/m.exec(clean);
   const pkg = pkgMatch ? pkgMatch[1] : null;
 
-  // Cerca dichiarazioni class/interface/enum
-  const classRe = /(?:public|protected|private|abstract|final)?\s*(?:static\s+)?(class|interface|enum)\s+(\w+)(?:\s+extends\s+([\w,\s]+?))?(?:\s+implements\s+([\w,\s]+?))?\s*\{/g;
+  // Supporta generics <...> opzionali
+  const classRe = /(class|interface|enum)\s+(\w+)(?:\s*<[^{]+?>)?(?:\s+extends\s+([\w\s<>,.]+))?(?:\s+implements\s+([\w\s<>,.]+))?\s*\{/g;
 
-  let match;
-  while ((match = classRe.exec(clean)) !== null) {
-    const type      = match[1];           // class | interface | enum
-    const name      = match[2];
-    const extendsRaw  = match[3] || '';
-    const implementsRaw = match[4] || '';
+  let m;
+  while ((m = classRe.exec(clean))) {
+    const name = m[2];
+    const type = m[1];
 
-    const body = extractBlock(clean, match.index + match[0].length - 1);
+    const body = extractBlock(clean, m.index + m[0].length - 1);
+    const statements = extractTopLevelStatements(body);
 
-    const methods    = extractJavaMethods(body);
-    const fields     = extractJavaFields(body);
-    const relations  = [];
+    const fields = [];
+    const methods = [];
+    const relations = [];
 
-    // Ereditarietà
-    extendsRaw.split(',').map(s => s.trim()).filter(Boolean).forEach(parent => {
-      relations.push({ kind: 'extends', target: parent });
+    statements.forEach(stmt => {
+      // METODI & COSTRUTTORI (Return type opzionale per supportare costruttori)
+      const methodMatch = /^(public|protected|private)?\s*(static\s+|abstract\s+|final\s+)*(?:([\w<>\[\]]+)\s+)?(\w+)\s*\(([^)]*)\)/.exec(stmt);
+
+      if (methodMatch) {
+        const nameVal = methodMatch[4];
+        if (!INVALID.has(nameVal)) {
+          methods.push({
+            visibility: visSymbol(methodMatch[1] || 'package'),
+            name: nameVal,
+            returnType: methodMatch[3] || '',
+            params: methodMatch[5].trim(),
+            isStatic: (methodMatch[2] || '').includes('static')
+          });
+          return;
+        }
+      }
+
+      // CAMPI
+      const fieldMatch = /^(public|protected|private)?\s*(static\s+|final\s+)*([\w<>\[\]]+)\s+(\w+)\s*(=.*)?;/.exec(stmt);
+
+      if (fieldMatch) {
+        const nameVal = fieldMatch[4];
+        const typeVal = fieldMatch[3];
+
+        if (!INVALID.has(nameVal) && typeVal !== 'void') {
+          fields.push({
+            visibility: visSymbol(fieldMatch[1] || 'package'),
+            name: nameVal,
+            type: typeVal
+          });
+
+          // Estrae associazioni "uses"
+          const refs = extractReferencedTypes(typeVal);
+          refs.forEach(ref => {
+            if (ref !== name && ref !== nameVal) {
+              relations.push({ kind: 'uses', target: ref });
+            }
+          });
+        }
+      }
     });
 
-    // Implementazione
-    implementsRaw.split(',').map(s => s.trim()).filter(Boolean).forEach(iface => {
-      relations.push({ kind: 'implements', target: iface });
-    });
+    // Relazioni extends e implements
+    if (m[3]) {
+      m[3].split(',').map(s => s.trim()).filter(Boolean).forEach(p => {
+        const target = p.replace(/<.*>/g, '').trim();
+        if (target) relations.push({ kind: 'extends', target });
+      });
+    }
+
+    if (m[4]) {
+      m[4].split(',').map(s => s.trim()).filter(Boolean).forEach(i => {
+        const target = i.replace(/<.*>/g, '').trim();
+        if (target) relations.push({ kind: 'implements', target });
+      });
+    }
 
     classes.push({ name, type, file, package: pkg, fields, methods, relations });
   }
@@ -60,87 +329,92 @@ function parseJava(src, file) {
   return classes;
 }
 
-function extractJavaMethods(body) {
-  const methods = [];
-  // Firma metodo: [visibility] [static] [tipo] nomeMetodo(params)
-  const re = /(public|protected|private|package)?\s*(static\s+|abstract\s+|final\s+)*([\w<>\[\]]+)\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[\w,\s]+)?\s*(?:\{|;)/g;
-  let m;
-  while ((m = re.exec(body)) !== null) {
-    const vis    = m[1] || 'package';
-    const retType = m[3];
-    const name   = m[4];
-    const params = m[5].trim();
-    const isStatic = (m[2] || '').includes('static');
-
-    // Filtra costrutti Java non-metodo
-    if (['if','while','for','switch','catch','return'].includes(name)) continue;
-    if (retType === 'return') continue;
-
-    methods.push({
-      visibility: visSymbol(vis),
-      name,
-      returnType: retType,
-      params,
-      isStatic,
-    });
-  }
-  return methods;
-}
-
-function extractJavaFields(body) {
-  const fields = [];
-  const re = /^\s*(public|protected|private|package)?\s*(static\s+|final\s+)*([\w<>\[\]]+)\s+(\w+)\s*(?:=\s*[^;]+)?;/gm;
-  let m;
-  while ((m = re.exec(body)) !== null) {
-    const vis   = m[1] || 'package';
-    const type  = m[3];
-    const name  = m[4];
-    if (['return','class','new','import'].includes(name)) continue;
-    if (['void','if','for','while'].includes(type)) continue;
-    fields.push({ visibility: visSymbol(vis), name, type });
-  }
-  return fields;
-}
-
 // ─────────────────────────────────────────────
 //  C / C++ PARSER
 // ─────────────────────────────────────────────
 
 function parseCCpp(src, file) {
+  const clean = removeComments(src);
   const classes = [];
 
-  const clean = src
-    .replace(/\/\/[^\n]*/g, '')
-    .replace(/\/\*[\s\S]*?\*\//g, '');
+  // Supporta eredità multipla e generic template
+  const classRe = /(class|struct)\s+(\w+)(?:\s*:\s*(?:public|protected|private)?\s*([\w:<>, ]+))?\s*\{/g;
 
-  // struct / class
-  const classRe = /(class|struct)\s+(\w+)(?:\s*:\s*(?:public|protected|private)?\s*([\w:]+))?\s*\{/g;
+  let m;
+  while ((m = classRe.exec(clean))) {
+    const name = m[2];
+    const type = m[1];
 
-  let match;
-  while ((match = classRe.exec(clean)) !== null) {
-    const type     = match[1] === 'struct' ? 'struct' : 'class';
-    const name     = match[2];
-    const parent   = match[3] || null;
+    const body = extractBlock(clean, m.index + m[0].length - 1);
+    const statements = extractTopLevelStatements(body);
 
-    const body     = extractBlock(clean, match.index + match[0].length - 1);
-    const methods  = extractCppMethods(body);
-    const fields   = extractCppFields(body);
+    const fields = [];
+    const methods = [];
     const relations = [];
 
-    if (parent) {
-      relations.push({ kind: 'extends', target: parent });
-    }
+    let visibility = (type === 'struct') ? '+' : '-';
 
-    // Cerca puntatori a altre strutture (composizione/dipendenza)
-    const ptrRe = /(\w+)\s*\*/g;
-    let pm;
-    while ((pm = ptrRe.exec(body)) !== null) {
-      const candidate = pm[1];
-      if (candidate !== name && /^[A-Z]/.test(candidate)) {
-        if (!relations.find(r => r.target === candidate)) {
-          relations.push({ kind: 'uses', target: candidate });
+    statements.forEach(stmt => {
+      stmt = stmt.trim();
+
+      // Cambiamento di visibilità
+      if (/^\s*public\s*:/.test(stmt)) {
+        visibility = '+';
+        return;
+      }
+      if (/^\s*protected\s*:/.test(stmt)) {
+        visibility = '#';
+        return;
+      }
+      if (/^\s*private\s*:/.test(stmt)) {
+        visibility = '-';
+        return;
+      }
+
+      // METODI (Supporta virtual, static, inline, costruttori/distruttori)
+      const mm = /^(virtual\s+|inline\s+|explicit\s+|static\s+)*(?:([\w:*&<>]+)\s+)?(~?\w+)\s*\(([^)]*)\)/.exec(stmt);
+
+      if (mm) {
+        const nameVal = mm[3];
+        if (!INVALID.has(nameVal)) {
+          methods.push({
+            visibility,
+            name: nameVal,
+            returnType: mm[2] || '',
+            params: mm[4].trim(),
+            isStatic: (mm[1] || '').includes('static')
+          });
+          return;
         }
       }
+
+      // CAMPI
+      const fm = /^(static\s+|const\s+|mutable\s+)*([\w:*&<>]+)\s+(\w+)\s*(=.*)?;/.exec(stmt);
+
+      if (fm) {
+        const typeVal = fm[2];
+        const nameVal = fm[3];
+
+        if (!INVALID.has(nameVal)) {
+          fields.push({ visibility, name: nameVal, type: typeVal });
+
+          // Estrae associazioni "uses"
+          const refs = extractReferencedTypes(typeVal);
+          refs.forEach(ref => {
+            if (ref !== name && ref !== nameVal) {
+              relations.push({ kind: 'uses', target: ref });
+            }
+          });
+        }
+      }
+    });
+
+    // Multiple inheritance & templates
+    if (m[3]) {
+      m[3].split(',').map(s => s.trim()).filter(Boolean).forEach(parent => {
+        const target = parent.replace(/(public|protected|private)\s+/g, '').replace(/<.*>/g, '').trim();
+        if (target) relations.push({ kind: 'extends', target });
+      });
     }
 
     classes.push({ name, type, file, fields, methods, relations });
@@ -149,136 +423,85 @@ function parseCCpp(src, file) {
   return classes;
 }
 
-function extractCppMethods(body) {
-  const methods = [];
-  // tipo nomeMetodo(params) con corpo o ;
-  const re = /(?:virtual\s+|static\s+|inline\s+|explicit\s+)?([\w:*&<>]+)\s+(\w+)\s*\(([^)]*)\)\s*(?:const)?\s*(?:override|final)?\s*(?:\{|;|=\s*0)/g;
-  let m;
-  while ((m = re.exec(body)) !== null) {
-    const retType = m[1];
-    const name    = m[2];
-    const params  = m[3].trim();
-    if (['if','while','for','switch'].includes(name)) continue;
-    if (retType === 'return') continue;
-    methods.push({ visibility: '+', name, returnType: retType, params, isStatic: false });
-  }
-  return methods;
-}
+// ─────────────────────────────────────────────
+//  PLANTUML
+// ─────────────────────────────────────────────
 
-function extractCppFields(body) {
-  const fields = [];
-  // Cerca variabili membro semplici
-  const sections = { public: '+', protected: '#', private: '-' };
-  let currentVis = '-'; // default C++ class è private
+function buildPlantUML(classes) {
+  const out = ['@startuml'];
 
-  const lines = body.split('\n');
-  lines.forEach(line => {
-    const trim = line.trim();
-    if (/^public\s*:/.test(trim))    { currentVis = '+'; return; }
-    if (/^protected\s*:/.test(trim)) { currentVis = '#'; return; }
-    if (/^private\s*:/.test(trim))   { currentVis = '-'; return; }
+  // Styling moderno ed elegante
+  out.push('skinparam style strictuml');
+  out.push('skinparam classAttributeIconSize 0');
+  out.push('skinparam monochrome false');
+  out.push('skinparam shadowing false');
 
-    const fieldRe = /^([\w:*&<>]+)\s+(\w+)\s*(?:=\s*[^;]+)?;$/;
-    const fm = fieldRe.exec(trim);
-    if (fm) {
-      const type = fm[1];
-      const name = fm[2];
-      if (['return','class','struct','if','for','while'].includes(name)) return;
-      fields.push({ visibility: currentVis, name, type });
+  const packages = {};
+  const flatClasses = [];
+
+  classes.forEach(c => {
+    if (c.package) {
+      if (!packages[c.package]) packages[c.package] = [];
+      packages[c.package].push(c);
+    } else {
+      flatClasses.push(c);
     }
   });
-  return fields;
-}
 
-// ─────────────────────────────────────────────
-//  PLANTUML GENERATOR
-// ─────────────────────────────────────────────
-
-/**
- * Converte l'array di ClassModel in codice PlantUML.
- * @param {ClassModel[]} classes
- * @returns {string}
- */
-function buildPlantUML(classes) {
-  const lines = ['@startuml', 'skinparam classBackgroundColor #1a1d27', 'skinparam classBorderColor #3d4460', 'skinparam classArrowColor #00e5a0', 'skinparam shadowing false', ''];
-
-  // Dichiarazioni
-  classes.forEach(cls => {
-    const keyword = cls.type === 'interface' ? 'interface'
-                  : cls.type === 'enum'      ? 'enum'
+  function renderClass(c) {
+    const classLines = [];
+    const keyword = c.type === 'interface' ? 'interface'
+                  : c.type === 'enum' ? 'enum'
                   : 'class';
 
-    lines.push(`${keyword} ${cls.name} {`);
+    classLines.push(`${keyword} ${c.name} {`);
 
-    // Campi
-    cls.fields.forEach(f => {
-      lines.push(`  ${f.visibility}${f.name} : ${f.type}`);
+    c.fields.forEach(f => {
+      classLines.push(`  ${f.visibility}${f.name} : ${f.type}`);
     });
 
-    if (cls.fields.length > 0 && cls.methods.length > 0) {
-      lines.push('  --');
-    }
+    if (c.fields.length && c.methods.length) classLines.push('  --');
 
-    // Metodi (tutti)
-    cls.methods.forEach(m => {
-      const params = m.params || '';
+    c.methods.forEach(m => {
       const ret = m.returnType ? ` : ${m.returnType}` : '';
-      lines.push(`  ${m.visibility}${m.name}(${params})${ret}`);
+      classLines.push(`  ${m.visibility}${m.name}(${m.params})${ret}`);
     });
 
-    lines.push('}');
-    lines.push('');
-  });
-
-  // Relazioni
-  classes.forEach(cls => {
-    cls.relations.forEach(rel => {
-      if (rel.kind === 'extends') {
-        lines.push(`${rel.target} <|-- ${cls.name}`);
-      } else if (rel.kind === 'implements') {
-        lines.push(`${rel.target} <|.. ${cls.name}`);
-      } else if (rel.kind === 'uses') {
-        // Solo se la classe target esiste nel modello
-        if (classes.find(c => c.name === rel.target)) {
-          lines.push(`${cls.name} ..> ${rel.target}`);
-        }
-      }
-    });
-  });
-
-  lines.push('');
-  lines.push('@enduml');
-  return lines.join('\n');
-}
-
-// ─────────────────────────────────────────────
-//  UTILITIES
-// ─────────────────────────────────────────────
-
-/**
- * Estrae il blocco { ... } bilanciato partendo dall'indice dell'apertura.
- */
-function extractBlock(src, openIdx) {
-  let depth = 0;
-  let i = openIdx;
-  let start = -1;
-
-  while (i < src.length) {
-    if (src[i] === '{') {
-      if (depth === 0) start = i + 1;
-      depth++;
-    } else if (src[i] === '}') {
-      depth--;
-      if (depth === 0) return src.slice(start, i);
-    }
-    i++;
+    classLines.push('}');
+    return classLines.join('\n');
   }
-  return src.slice(start); // fallback
-}
 
-function visSymbol(v) {
-  const map = { public: '+', protected: '#', private: '-', package: '~' };
-  return map[v] || '~';
+  // Renderizza classi raggruppate per package
+  Object.keys(packages).sort().forEach(pkgName => {
+    out.push(`package "${pkgName}" {`);
+    packages[pkgName].forEach(c => {
+      out.push(renderClass(c));
+    });
+    out.push('}\n');
+  });
+
+  // Renderizza classi flat (senza package)
+  flatClasses.forEach(c => {
+    out.push(renderClass(c));
+  });
+
+  // Relazioni uniche
+  const seen = new Set();
+
+  classes.forEach(c => {
+    c.relations.forEach(r => {
+      const key = `${c.name}-${r.kind}-${r.target}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      if (r.kind === 'extends') out.push(`${r.target} <|-- ${c.name}`);
+      if (r.kind === 'implements') out.push(`${r.target} <|.. ${c.name}`);
+      if (r.kind === 'uses') out.push(`${c.name} ..> ${r.target}`);
+    });
+  });
+
+  out.push('@enduml');
+  return out.join('\n');
 }
 
 module.exports = { parseJava, parseCCpp, buildPlantUML };

@@ -10,6 +10,9 @@ let result = null;
 let currentTab = 'diagram';
 let lastTabBeforeDetail = 'diagram';
 let groupMode = 'file'; // file | package | dir
+let searchQuery = '';
+let selectedTypeFilter = 'all';
+let selectedTheme = 'none';
 
 // Preview/runtime caches
 let previewItems = []; // [{ key, kind, title, tag, puml }]
@@ -112,6 +115,46 @@ function pick(f) {
 /* -------------------------------- Wiring -------------------------------- */
 analyzeBtn.addEventListener('click', analyze);
 document.getElementById('detailClose').addEventListener('click', closeDetail);
+
+/* ----------------------------- Search & Filters -------------------------- */
+const searchToolbar = document.getElementById('searchToolbar');
+const classSearchInput = document.getElementById('classSearchInput');
+const clearSearchBtn = document.getElementById('clearSearchBtn');
+const filterChips = document.querySelectorAll('.filter-chip');
+const pumlThemeSelect = document.getElementById('pumlThemeSelect');
+
+if (classSearchInput) {
+  classSearchInput.addEventListener('input', (e) => {
+    searchQuery = String(e.target.value || '').trim();
+    if (clearSearchBtn) clearSearchBtn.style.display = searchQuery ? 'block' : 'none';
+    repaintAll();
+  });
+}
+
+if (clearSearchBtn) {
+  clearSearchBtn.addEventListener('click', () => {
+    if (classSearchInput) classSearchInput.value = '';
+    searchQuery = '';
+    clearSearchBtn.style.display = 'none';
+    repaintAll();
+  });
+}
+
+filterChips.forEach(chip => {
+  chip.addEventListener('click', () => {
+    filterChips.forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    selectedTypeFilter = chip.dataset.type || 'all';
+    repaintAll();
+  });
+});
+
+if (pumlThemeSelect) {
+  pumlThemeSelect.addEventListener('change', (e) => {
+    selectedTheme = e.target.value || 'none';
+    repaintAll();
+  });
+}
 
 const grpPackageEl = document.getElementById('grpPackage');
 const grpDirEl = document.getElementById('grpDir');
@@ -246,6 +289,7 @@ async function analyze() {
 /* --------------------------------- Paint --------------------------------- */
 function paint(d) {
   document.getElementById('statsStrip').classList.add('show');
+  if (searchToolbar) searchToolbar.style.display = 'flex';
   paintStats(d);
 
   const classes = Array.isArray(d.classes) ? d.classes : [];
@@ -302,19 +346,38 @@ function paintBlocks(classes) {
   const empty = document.getElementById('emptyD');
   const wrap = document.getElementById('blocks');
 
-  if (!classes.length) {
+  // Filter classes on the frontend
+  let filtered = classes || [];
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    filtered = filtered.filter(c => 
+      c.name.toLowerCase().includes(q) ||
+      (c.package && c.package.toLowerCase().includes(q)) ||
+      (c.fields && c.fields.some(f => f.name.toLowerCase().includes(q) || f.type.toLowerCase().includes(q))) ||
+      (c.methods && c.methods.some(m => m.name.toLowerCase().includes(q) || (m.returnType && m.returnType.toLowerCase().includes(q))))
+    );
+  }
+  if (selectedTypeFilter !== 'all') {
+    filtered = filtered.filter(c => c.type === selectedTypeFilter);
+  }
+
+  if (!filtered.length) {
     empty.style.display = 'flex';
+    empty.querySelector('.et').textContent = 'No matching structures';
+    empty.querySelector('.es').textContent = 'Try adjusting your search query or filters';
     wrap.style.display = 'none';
     wrap.innerHTML = '';
     return;
   }
 
   empty.style.display = 'none';
+  empty.querySelector('.et').textContent = 'No diagrams yet';
+  empty.querySelector('.es').textContent = 'Upload a ZIP or paste a GitHub repository URL, then click Analyze';
   wrap.style.display = 'flex';
   wrap.innerHTML = '';
 
   const groups = {};
-  classes.forEach((c, i) => {
+  filtered.forEach((c, i) => {
     const key = groupKey(c);
     if (!groups[key]) groups[key] = [];
     groups[key].push({ c, i });
@@ -405,12 +468,27 @@ function paintPreviewTab(classes, puml) {
   const panel = document.getElementById('prevPanel');
   const wrap = document.getElementById('prevWrap');
 
+  // Filter classes on the frontend
+  let filtered = classes || [];
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    filtered = filtered.filter(c => 
+      c.name.toLowerCase().includes(q) ||
+      (c.package && c.package.toLowerCase().includes(q)) ||
+      (c.fields && c.fields.some(f => f.name.toLowerCase().includes(q) || f.type.toLowerCase().includes(q))) ||
+      (c.methods && c.methods.some(m => m.name.toLowerCase().includes(q) || (m.returnType && m.returnType.toLowerCase().includes(q))))
+    );
+  }
+  if (selectedTypeFilter !== 'all') {
+    filtered = filtered.filter(c => c.type === selectedTypeFilter);
+  }
+
   // Cleanup old object URLs
   for (const url of imgUrlByKey.values()) URL.revokeObjectURL(url);
   imgUrlByKey.clear();
   pumlByKey.clear();
 
-  previewItems = buildPreviewItems(classes, puml);
+  previewItems = buildPreviewItems(filtered, puml);
 
   if (!previewItems.length) {
     empty.style.display = 'flex';
@@ -459,6 +537,19 @@ function paintPreviewTab(classes, puml) {
 function buildPreviewItems(classes, fullPuml) {
   if (!classes.length || !String(fullPuml || '').trim()) return [];
 
+  const items = [];
+
+  // Add Full Project Diagram at the top (only when viewing 'all' types)
+  if (selectedTypeFilter === 'all') {
+    items.push({
+      key: 'project:full',
+      kind: 'project',
+      title: '🌐 Full Project Diagram',
+      tag: 'package',
+      puml: fullPuml
+    });
+  }
+
   if (groupMode === 'package' || groupMode === 'dir') {
     const grouped = {};
     classes.forEach((c) => {
@@ -467,7 +558,7 @@ function buildPreviewItems(classes, fullPuml) {
       grouped[k].push(c);
     });
 
-    return Object.keys(grouped).sort((a, b) => a.localeCompare(b)).map((k) => {
+    const groupItems = Object.keys(grouped).sort((a, b) => a.localeCompare(b)).map((k) => {
       const cs = grouped[k];
       const isPkg = groupMode === 'package';
       const kind = isPkg ? 'package' : 'dir';
@@ -479,10 +570,12 @@ function buildPreviewItems(classes, fullPuml) {
         puml: buildScopedPlantUml(fullPuml, cs, { includeRelations: 'internal' })
       };
     });
+
+    return [...items, ...groupItems];
   }
 
   // Default: one preview per class
-  return classes
+  const classItems = classes
     .slice()
     .sort((a, b) => String(a.name).localeCompare(String(b.name)))
     .map((c) => ({
@@ -492,6 +585,8 @@ function buildPreviewItems(classes, fullPuml) {
       tag: c.type || 'class',
       puml: buildScopedPlantUml(fullPuml, [c], { includeRelations: 'touching' })
     }));
+
+  return [...items, ...classItems];
 }
 
 async function renderOnePreview(key) {
@@ -527,6 +622,21 @@ function paintPumlTab(puml, classes) {
   const panel = document.getElementById('pumlPanel');
   const wrap = document.getElementById('pumlBlocks');
 
+  // Filter classes on the frontend
+  let filtered = classes || [];
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    filtered = filtered.filter(c => 
+      c.name.toLowerCase().includes(q) ||
+      (c.package && c.package.toLowerCase().includes(q)) ||
+      (c.fields && c.fields.some(f => f.name.toLowerCase().includes(q) || f.type.toLowerCase().includes(q))) ||
+      (c.methods && c.methods.some(m => m.name.toLowerCase().includes(q) || (m.returnType && m.returnType.toLowerCase().includes(q))))
+    );
+  }
+  if (selectedTypeFilter !== 'all') {
+    filtered = filtered.filter(c => c.type === selectedTypeFilter);
+  }
+
   if (!puml.trim() || !classes.length) {
     empty.style.display = 'flex';
     panel.style.display = 'none';
@@ -539,10 +649,10 @@ function paintPumlTab(puml, classes) {
   wrap.innerHTML = '';
 
   const lines = puml.split('\n');
-  
+
   if (groupMode === 'package' || groupMode === 'dir') {
     const grouped = {};
-    classes.forEach((c) => {
+    filtered.forEach((c) => {
       const k = groupKey(c);
       if (!grouped[k]) grouped[k] = [];
       grouped[k].push(c);
@@ -555,7 +665,7 @@ function paintPumlTab(puml, classes) {
       wrap.appendChild(mkPumlBlock(groupTitle(k), scoped, false, `${cs.length}`, key));
     });
   } else {
-    classes
+    filtered
       .slice()
       .sort((a, b) => String(a.name).localeCompare(String(b.name)))
       .forEach((c) => {
@@ -568,7 +678,7 @@ function paintPumlTab(puml, classes) {
   const relLines = lines.filter((l) => relLine(l));
   if (relLines.length) wrap.appendChild(mkPumlBlock('Relations (all)', relLines.join('\n'), false, `${relLines.length}`, null));
 
-  }
+}
 
 function mkPumlBlock(label, code, open, meta, dlKey) {
   const el = document.createElement('div');
@@ -825,7 +935,6 @@ function copyAll() {
 
 /* --------------------------------- PlantUML ------------------------------- */
 function pumlForPreview(puml) {
-  // Preview style: white background (does not change the downloadable source).
   const src = String(puml || '');
   const lines = src.split('\n');
   const out = [];
@@ -836,12 +945,16 @@ function pumlForPreview(puml) {
     if (!injected && line.startsWith('@startuml')) {
       injected = true;
       out.push('@startuml');
-      out.push('skinparam backgroundColor white');
-      out.push('skinparam classBackgroundColor white');
-      out.push('skinparam classBorderColor #111111');
-      out.push('skinparam classFontColor #111111');
-      out.push('skinparam classArrowColor #111111');
-      out.push('skinparam shadowing false');
+      if (selectedTheme !== 'none') {
+        out.push(`!theme ${selectedTheme}`);
+      } else {
+        out.push('skinparam backgroundColor white');
+        out.push('skinparam classBackgroundColor white');
+        out.push('skinparam classBorderColor #111111');
+        out.push('skinparam classFontColor #111111');
+        out.push('skinparam classArrowColor #111111');
+        out.push('skinparam shadowing false');
+      }
       continue;
     }
     out.push(line);

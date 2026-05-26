@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
@@ -128,6 +128,22 @@
       </button>
     </div>
 
+    <!-- SEARCH & FILTER TOOLBAR -->
+    <div class="search-toolbar" id="searchToolbar" style="display: none">
+      <div class="search-input-wrap">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="classSearchInput" placeholder="Search classes, fields, or methods..." autocomplete="off" />
+        <button id="clearSearchBtn" class="clear-search-btn" type="button" aria-label="Clear search" style="display: none">&times;</button>
+      </div>
+      <div class="filter-chips" id="filterChips">
+        <button class="filter-chip active" data-type="all" type="button">All</button>
+        <button class="filter-chip" data-type="class" type="button">Classes</button>
+        <button class="filter-chip" data-type="interface" type="button">Interfaces</button>
+        <button class="filter-chip" data-type="struct" type="button">Structs</button>
+        <button class="filter-chip" data-type="enum" type="button">Enums</button>
+      </div>
+    </div>
+
     <!-- Loading inside main -->
     <div class="loading" id="loading">
       <div class="spin"></div>
@@ -162,7 +178,17 @@
         <div id="prevPanel" style="display:none">
           <div class="puml-toolbar">
             <span class="puml-title">UML Preview</span>
-            <button class="btn-sm pri" data-action="render-all" type="button">Render All</button>
+            <div class="toolbar-actions">
+              <select id="pumlThemeSelect" class="theme-select" title="Choose a theme">
+                <option value="none">🎨 Default Theme</option>
+                <option value="blueprint">💙 Blueprint</option>
+                <option value="sandstone">🧡 Sandstone</option>
+                <option value="crt-amber">📟 Retro CRT (Amber)</option>
+                <option value="toy">🧸 Toy</option>
+                <option value="sketchy">✏️ Sketchy</option>
+              </select>
+              <button class="btn-sm pri" data-action="render-all" type="button">Render All</button>
+            </div>
           </div>
           <div class="blocks" id="prevWrap"></div>
         </div>
