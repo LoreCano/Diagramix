@@ -251,7 +251,7 @@ async function analyze() {
       try {
         const data = await res.json();
         msg = data && (data.error || data.message) ? (data.error || data.message) : msg;
-      } catch {}
+      } catch { }
       throw new Error(msg);
     }
 
@@ -350,7 +350,7 @@ function paintBlocks(classes) {
   let filtered = classes || [];
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
-    filtered = filtered.filter(c => 
+    filtered = filtered.filter(c =>
       c.name.toLowerCase().includes(q) ||
       (c.package && c.package.toLowerCase().includes(q)) ||
       (c.fields && c.fields.some(f => f.name.toLowerCase().includes(q) || f.type.toLowerCase().includes(q))) ||
@@ -472,7 +472,7 @@ function paintPreviewTab(classes, puml) {
   let filtered = classes || [];
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
-    filtered = filtered.filter(c => 
+    filtered = filtered.filter(c =>
       c.name.toLowerCase().includes(q) ||
       (c.package && c.package.toLowerCase().includes(q)) ||
       (c.fields && c.fields.some(f => f.name.toLowerCase().includes(q) || f.type.toLowerCase().includes(q))) ||
@@ -538,17 +538,6 @@ function buildPreviewItems(classes, fullPuml) {
   if (!classes.length || !String(fullPuml || '').trim()) return [];
 
   const items = [];
-
-  // Add Full Project Diagram at the top (only when viewing 'all' types)
-  if (selectedTypeFilter === 'all') {
-    items.push({
-      key: 'project:full',
-      kind: 'project',
-      title: '🌐 Full Project Diagram',
-      tag: 'package',
-      puml: fullPuml
-    });
-  }
 
   if (groupMode === 'package' || groupMode === 'dir') {
     const grouped = {};
@@ -626,7 +615,7 @@ function paintPumlTab(puml, classes) {
   let filtered = classes || [];
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
-    filtered = filtered.filter(c => 
+    filtered = filtered.filter(c =>
       c.name.toLowerCase().includes(q) ||
       (c.package && c.package.toLowerCase().includes(q)) ||
       (c.fields && c.fields.some(f => f.name.toLowerCase().includes(q) || f.type.toLowerCase().includes(q))) ||
@@ -1033,7 +1022,7 @@ function asyncPool(limit, items, iterFn) {
   const workers = new Array(Math.max(1, limit)).fill(0).map(async () => {
     while (q.length) {
       const it = q.shift();
-      try { await iterFn(it); } catch {}
+      try { await iterFn(it); } catch { }
     }
   });
   return Promise.all(workers);
